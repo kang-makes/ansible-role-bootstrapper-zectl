@@ -1,0 +1,35 @@
+- name: Preparing chroot environment on not bootstrapped systems
+  listen: Configure zectl
+  command:
+    warn: no
+    argv: [ "mount", "{{ item.src }}", "{{ root_target + item.path }}", "-t", "{{ item.fstype }}", "-o", "{{ item.opts }},x-mount.mkdir" ]
+  changed_when: no
+  loop: "{{ chroot_mounts }}"
+  when: not ansible_local.bootstrapped | default(false)
+
+- name: Configuring zectl
+  listen: Configure zectl
+  debug:
+    msg: "{% if not ansible_local.bootstrapped | default(false) %}chroot {{ root_target }} {% endif %}zectl set {{ item }}"
+  with_items: "{{ commands | list }}"
+  vars:
+    commands: >-
+      {% set ns = namespace(commands=[ "bootloader=" + bootloader.name ]) -%}
+      {% for param, value in bootloader['params'].items() -%}
+        {% set command = bootloader.name+":"+param+"="+value -%}
+        {% set ns.commands = ns.commands + [ command ] -%}
+      {% endfor -%}
+      {{ ns.commands }}
+
+- name: Unmounting chroot environment on not bootstrapped systems
+  listen: Configure zectl
+  command:
+    warn: no
+    argv: [ "umount", "-l", "{{ root_target + item.path }}" ]
+  changed_when: no
+  loop: "{{ chroot_mounts[::-1] }}"
+  when: not ansible_local.bootstrapped | default(false)
+
+- name: Export all zpools
+  command: "zpool export {{ item }}"
+  with_items: "{{ ansible_local.disk_layout | json_query(\"[?step=='zpool'].name\") }}"

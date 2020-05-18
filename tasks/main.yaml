@@ -1,0 +1,73 @@
+---
+- name: Export pool, clean target and import in order so could used by zedenv
+  block:
+  - name: Export pools
+    command: "zpool export {{ item }}"
+    with_items: "{{ ansible_local.disk_layout | json_query(\"[?step=='zpool'].name\") }}"
+
+  - name: Import pools without mounting any dataset
+    command: "zpool import -N -R {{ root_target }} {{ item }}"
+    with_items: "{{ ansible_local.disk_layout | json_query(\"[?step=='zpool'].name\") }}"
+
+  - name: Clean any previously created folder
+    file:
+      path: "{{ root_target }}"
+      state: absent
+      
+  - name: Look for a default zedenv bootenv
+    set_fact:
+      bootenv: "{{ item }}"
+    when:
+      - item.split("/") | length == 3
+      - item.split("/")[0] in ansible_local.disk_layout | json_query("[?step=='zpool'].name")
+      - item.split("/")[1] == inventory_hostname_short
+      - item.split("/")[2] == "default"
+    with_items: "{{ ansible_local.disk_layout | json_query(\"[?step=='zfs'].name\") }}"
+
+  - name: Check if a bootenv was found
+    assert:
+      that: bootenv is defined
+      fail_msg: "No default bootenv has been found on this host layout"
+      success_msg: "Found bootenv: {{ bootenv | default('')}}"
+
+  - name: Mount zedenv default bootenv
+    command:
+      warn: no
+      argv: [ "zfs", "mount", "{{ bootenv }}" ]
+    register: test
+
+  - name: Mount UEFI file system
+    command:
+      warn: no
+      argv: [ "mount", "{{ item.src }}", "{{ item.path }}", "-t", "{{ item.fstype }}", "-o", "{{ item.opts }},x-mount.mkdir" ]
+    changed_when: no
+    with_items: "{{ to_mount | json_query(query) }}"
+    vars:
+      query: "[?path=='{{root_target}}{{bootloader.params.efi}}']"
+
+  - name: Ensure default bootenv folder is created
+    file:
+      path: "{{root_target}}{{bootloader.params.efi}}/env/org.zectl-default"
+      state: directory
+
+  - name: Unmount UEFI file system
+    command:
+      warn: no
+      argv: [ "umount", "{{ item.path }}" ]
+    changed_when: no
+    with_items: "{{ to_mount | json_query(query) }}"
+    vars:
+      query: "[?path=='{{root_target}}{{bootloader.params.efi}}']"
+
+  - name: Set default bootenv as bootfs
+    command: "zpool set bootfs={{ bootenv }} {{ bootenv.split('/')[0] }}"
+    notify: Configure zectl
+
+  - name: Mount all datasets
+    command: zfs mount -a
+    notify: Export all zpools
+
+  - name: Informing bootloader roles that zectl is being used
+    set_fact:
+      system_uses_zectl: true
+  when: not ansible_local.bootstrapped | default(false) and system_uses_zfs

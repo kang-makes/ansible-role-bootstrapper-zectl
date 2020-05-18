@@ -1,0 +1,13 @@
+---
+root_target: /target
+
+default_efi_mountpoint: /efi
+
+pacman_sysupgrade: true
+pacman_config: /etc/pacman.conf
+
+bootloader:
+  name: systemdboot
+  params:
+    efi: /efi
+    boot: /boot
